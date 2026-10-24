@@ -43,6 +43,28 @@
     ["q17 PhishMalware", "Urgency wording followed by a download/payload lure.", "S [H] G U E R X X", 17],
     ["q19 BenignPass", "Ordinary host with a neutral path and none of the risky sequences.", "S [H] G N X", 19]
   ];
+  const urlTestLinks = [
+    ["PaaS brand pattern", "https://secure-brand-login.vercel.app/verify-account"],
+    ["PaaS with PayPal token", "https://paypal-login.netlify.app/confirm"],
+    ["PaaS Google verification", "https://google-login.pages.dev/validate"],
+    ["PaaS Apple security cue", "https://apple-secure.github.io/recover"],
+    ["PaaS missing confirmation", "https://brand-login.vercel.app/account"],
+    ["Generic PayPal mismatch", "https://paypal-login.example.com/verify"],
+    ["Generic Amazon mismatch", "https://amazon-secure.example.net/account"],
+    ["Generic Google mismatch", "https://accounts.example.org/google/verify"],
+    ["Brand without action", "https://paypal.example.com/"],
+    ["Action without brand", "https://example.com/login"],
+    ["Urgency and download lure", "https://example.com/urgent-download-payload"],
+    ["Urgency without download", "https://example.com/urgent-alert"],
+    ["Download without payload", "https://example.com/urgent-download"],
+    ["Payload without urgency", "https://example.com/download-payload"],
+    ["Ordinary neutral path", "https://example.com/home"],
+    ["Neutral path with query", "https://example.org/help?topic=general"],
+    ["Inspected generic host", "https://news.portal.example.com/home"],
+    ["Inspected PaaS host", "https://secure.brand-login.vercel.app/verify-account"],
+    ["Malformed URL", "http://["],
+    ["Missing URL scheme", "example.com/login"]
+  ];
 
   const alphabetOrder = D.ALPHABET;
   const getGroup = (group) => D.GROUPS[group] || D.GROUPS.front;
@@ -202,14 +224,7 @@
             <button class="btn primary" id="check-url-button" type="button">Parse and run</button>
           </div>
           <div class="field-error" id="url-error" role="alert"></div>
-          <div class="quick-fills" id="sample-urls">
-            <button class="quick-chip" type="button" data-sample-url="https://secure-brand-login.vercel.app/verify-account">PaaS pattern</button>
-            <button class="quick-chip" type="button" data-sample-url="https://paypal-login.example.com/verify">Brand mismatch</button>
-            <button class="quick-chip" type="button" data-sample-url="https://example.com/urgent-download-payload">Malware lure</button>
-            <button class="quick-chip" type="button" data-sample-url="https://example.com/home">Benign path</button>
-            <button class="quick-chip" type="button" data-sample-url="https://news.portal.example.com/home">Optional H</button>
-            <button class="quick-chip" type="button" data-sample-url="http://[">Malformed</button>
-          </div>
+          <details class="url-test-list"><summary>20 test URLs — select one to run it through the checker</summary><div class="url-test-links" id="sample-urls"></div></details>
           <div class="url-pipeline" aria-label="URL processing pipeline"><span>Parse</span><b>→</b><span>Tokenise</span><b>→</b><span>Symbol string</span><b>→</b><span>DFA run</span><b>→</b><span>Verdict</span></div>
           <div id="token-table-wrap"></div>
           <p><strong>Symbol string:</strong> <code class="mono" id="token-string">S P B A Y X</code></p>
@@ -310,6 +325,9 @@ console.log(result);
     </section>
   `;
   app.innerHTML = sectionContents;
+  $("#sample-urls").innerHTML = urlTestLinks.map(([label, url], index) =>
+    `<button class="url-test-link" type="button" data-sample-url="${esc(url)}"><span class="url-test-number">${String(index + 1).padStart(2, "0")}</span><span><strong>${esc(label)}</strong><code>${esc(url)}</code></span></button>`
+  ).join("");
 
   const viva = [
     ["What is a DFA, in one sentence?", "A machine with a finite set of states that reads input one symbol at a time and has exactly one next state for each (state, symbol), accepting if it ends in a final state."],
@@ -552,7 +570,13 @@ console.log(result);
         svgEl("rect", { x: lx - 16, y: ly - 14, width: 32, height: 28, class: "edge-label-hit", "data-edge-label-hit": index, "aria-label": `Show transition ${index + 1}` })
       );
       viewport.append(labelGroup);
-      labelGroup.querySelector("[data-edge-label-hit]").addEventListener("click", () => jumpToTransition(index));
+      const labelHit = labelGroup.querySelector("[data-edge-label-hit]");
+      labelHit.addEventListener("pointerenter", (event) => showEdgeTooltip(index, event));
+      labelHit.addEventListener("pointermove", moveTooltip);
+      labelHit.addEventListener("pointerleave", hideTooltip);
+      labelHit.addEventListener("focus", (event) => showEdgeTooltip(index, event));
+      labelHit.addEventListener("blur", hideTooltip);
+      labelHit.addEventListener("click", () => jumpToTransition(index));
     });
 
     D.STATES.forEach((item) => {
@@ -654,10 +678,30 @@ console.log(result);
 
   function showStateTooltip(id, event) {
     hoveredState = id;
+    highlightedEdges = new Set(pinnedEdge === null ? [] : [pinnedEdge]);
     const card = D.STATE_CARDS[id];
-    const outgoing = card.outgoing.length ? card.outgoing.join("; ") : "none";
+    const item = state(id);
+    const incoming = D.TRANSITIONS.map(([from, to, symbol], index) => ({ from, to, symbol, index }))
+      .filter((transition) => transition.to === id);
+    const outgoing = D.TRANSITIONS.map(([from, to, symbol], index) => ({ from, to, symbol, index }))
+      .filter((transition) => transition.from === id);
+    const incomingText = incoming.length
+      ? incoming.map(({ from, symbol }) => `${qname(from)} --${symbol}--> ${qname(id)}`).join("; ")
+      : "Start of every run.";
+    const outgoingText = outgoing.length
+      ? outgoing.map(({ to, symbol }) => `${symbol} → ${qname(to)}`).join("; ")
+      : "No outgoing transitions.";
+    const simulationDetails = getStateSimulationDetails(id);
     const tooltip = $("#diagram-tooltip") || createTooltip();
-    tooltip.innerHTML = `<strong>${esc(stateTitle(id))}</strong><br>${esc(card.role)}<br>${esc(card.meaning)}<br><strong>Outgoing:</strong> ${esc(outgoing)}`;
+    tooltip.innerHTML = `<div class="tooltip-title"><strong>${esc(stateTitle(id))}</strong><span class="tooltip-branch" style="${tintStyle(item.group)}">${esc(getGroup(item.group).name)}</span></div>
+      <div><strong>Role:</strong> ${esc(card.role)}${item.initial ? " · START" : ""}${item.final ? " · ACCEPTING" : ""}${id === 21 ? " · TRAP" : ""}</div>
+      <div><strong>Meaning:</strong> ${esc(card.meaning)}</div>
+      <div><strong>Reached by:</strong> ${esc(card.reachedBy)}</div>
+      <div><strong>Incoming:</strong> ${esc(incomingText)}</div>
+      <div><strong>Outgoing:</strong> ${esc(outgoingText)}</div>
+      <div><strong>Anything else:</strong> ${esc(card.anythingElse)}</div>
+      ${card.note ? `<div><strong>Note:</strong> ${esc(card.note)}</div>` : ""}
+      <div class="tooltip-simulation"><strong>Simulation:</strong> ${simulationDetails}</div>`;
     tooltip.style.display = "block";
     moveTooltip(event);
     refreshHighlights();
@@ -665,12 +709,68 @@ console.log(result);
 
   function showEdgeTooltip(index, event) {
     const [from, to, symbol] = D.TRANSITIONS[index];
+    const destination = state(to);
+    const meaning = D.SYMBOL_MEANINGS[symbol];
+    const simulationDetails = getEdgeSimulationDetails(index);
     const tooltip = $("#diagram-tooltip") || createTooltip();
-    tooltip.innerHTML = `<strong>${qname(from)} --${symbol}--> ${qname(to)}</strong><br>${esc(D.EDGE_READINGS[index])}`;
+    tooltip.innerHTML = `<div class="tooltip-title"><strong>${qname(from)} <span class="tooltip-symbol">${symbol}</span> → ${qname(to)}${destination.verdict ? ` · ${esc(destination.verdict)}` : ""}</strong></div>
+      <div><strong>Transition:</strong> ${esc(qname(from))} reads ${esc(symbol)} and moves to ${esc(qname(to))}.</div>
+      <div><strong>${esc(meaning.name)} (${esc(symbol)}):</strong> ${esc(meaning.meaning)}</div>
+      <div><strong>Reading:</strong> ${esc(D.EDGE_READINGS[index])}</div>
+      <div><strong>Destination:</strong> ${esc(D.STATE_CARDS[to].meaning)}</div>
+      <div class="tooltip-simulation"><strong>Simulation:</strong> ${simulationDetails}</div>`;
     tooltip.style.display = "block";
     moveTooltip(event);
     highlightedEdges = new Set([index]);
     refreshHighlights();
+  }
+
+  function getStateSimulationDetails(id) {
+    if (!sim.started) {
+      return "No run yet. This is the state's role and behavior in the DFA.";
+    }
+    const positions = sim.trace.reduce((matches, visitedId, index) => {
+      if (visitedId === id) matches.push(index);
+      return matches;
+    }, []);
+    if (!positions.length) {
+      return `Not reached in this run (${esc(sim.input || "(empty input)")}). Trace so far: ${sim.trace.map(qname).join(" → ")}.`;
+    }
+
+    const details = positions.map((position) => {
+      const symbolIndex = position - 1;
+      const arrived = position === 0
+        ? "start state before reading input"
+        : `after reading ${sim.input[symbolIndex]} (step ${position})`;
+      const isLastPosition = position === sim.trace.length - 1;
+      const outcome = isLastPosition && sim.deadState === id
+        ? `dead end: no arrow on ${sim.input[sim.index]}`
+        : isLastPosition && sim.halted && D.FINALS.includes(id)
+          ? `final verdict: ${state(id).verdict}`
+          : isLastPosition && sim.halted
+            ? "input ended here; this state is not accepting"
+            : isLastPosition
+              ? `current position; next symbol: ${sim.input[sim.index] || "none"}`
+              : `then read ${sim.input[position]} and moved to ${qname(sim.trace[position + 1])}`;
+      return `${arrived}; ${outcome}`;
+    });
+    return `${details.join(" · ")}<br><strong>Trace:</strong> ${sim.trace.map(qname).join(" → ")}`;
+  }
+
+  function getEdgeSimulationDetails(index) {
+    if (!sim.started) {
+      return "No run yet. The transition is available whenever its source state reads this symbol.";
+    }
+    const position = sim.transitionTrace.indexOf(index);
+    if (position >= 0) {
+      const [from, to, symbol] = D.TRANSITIONS[index];
+      return `Used at step ${position + 1}: input symbol ${position + 1} is ${symbol}; the run moved ${qname(from)} → ${qname(to)}. Trace: ${sim.trace.map(qname).join(" → ")}.`;
+    }
+    const [from, , symbol] = D.TRANSITIONS[index];
+    if (sim.deadState === from && sim.input[sim.index] === symbol) {
+      return `This run stopped at ${qname(from)} before taking this edge. Its next input symbol was ${symbol}, but no transition is defined for that pair.`;
+    }
+    return `Not used in this run (${esc(sim.input || "(empty input)")}). Current trace: ${sim.trace.map(qname).join(" → ")}.`;
   }
 
   function createTooltip() {
@@ -685,8 +785,9 @@ console.log(result);
   function moveTooltip(event) {
     const tooltip = $("#diagram-tooltip");
     if (!tooltip || !event || typeof event.clientX !== "number") return;
-    tooltip.style.left = `${Math.min(event.clientX + 14, window.innerWidth - 315)}px`;
-    tooltip.style.top = `${Math.min(event.clientY + 12, window.innerHeight - 140)}px`;
+    const width = Math.min(380, window.innerWidth - 24);
+    tooltip.style.left = `${Math.max(12, Math.min(event.clientX + 14, window.innerWidth - width - 12))}px`;
+    tooltip.style.top = `${Math.max(12, Math.min(event.clientY + 12, window.innerHeight - tooltip.offsetHeight - 12))}px`;
   }
 
   function hideTooltip() {
@@ -975,6 +1076,7 @@ console.log(result);
         banner.innerHTML = `<div class="result-banner reject">REJECT: symbols ran out in ${qname(sim.currentState)}, which is not accepting.</div>`;
       }
     }
+    if (hoveredState !== null) showStateTooltip(hoveredState, null);
     refreshHighlights();
   }
 
@@ -1223,7 +1325,9 @@ console.log(result);
     );
     tokens.splice(0, tokens.length, ...withoutAdjacentDuplicates);
     const sequence = tokens.map((token) => token.symbol);
-    const hasMalwareSequence = withoutAdjacentDuplicates.includes("E") && withoutAdjacentDuplicates.includes("R");
+    const lureIndex = sequence.indexOf("E");
+    const payloadIndex = sequence.lastIndexOf("R");
+    const hasMalwareSequence = lureIndex !== -1 && payloadIndex > lureIndex;
     emit("end of URL", "X", "terminator: nothing more to read");
     if (hasMalwareSequence) emit("second end marker", "X", "second terminator for the malware branch");
     const resultSymbols = tokens.map((token) => token.symbol);
